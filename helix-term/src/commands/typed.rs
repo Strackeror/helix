@@ -1600,11 +1600,13 @@ fn reload(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyh
             view.ensure_cursor_in_view(doc, scrolloff);
         })?;
     let doc_id = doc.id();
-    if let Some(path) = doc.path().map(ToOwned::to_owned) {
-        cx.editor
-            .language_servers
-            .file_event_handler
-            .file_changed(path);
+    if let Some(path) = doc.path() {
+        if !cx.editor.file_watcher.is_watching(path) {
+            cx.editor
+                .language_servers
+                .file_event_handler
+                .file_changed(path.to_path_buf());
+        }
     }
 
     if doc.should_request_full_file_blame(auto_fetch) {
@@ -1673,11 +1675,13 @@ fn reload_all(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
             continue;
         }
 
-        if let Some(path) = doc.path().map(ToOwned::to_owned) {
-            cx.editor
-                .language_servers
-                .file_event_handler
-                .file_changed(path);
+        if let Some(path) = doc.path() {
+            if !cx.editor.file_watcher.is_watching(path) {
+                cx.editor
+                    .language_servers
+                    .file_event_handler
+                    .file_changed(path.to_path_buf());
+            }
         }
 
         for view_id in view_ids {
