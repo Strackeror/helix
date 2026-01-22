@@ -54,14 +54,18 @@ tokio-stream = "0.1.18"
 toml = "1.1"
 termina = "0.3"
 sonic-rs = "0.5"
-globset = "0.4"
+# MSRV: update once the MSRV is >=1.85
+globset = "=0.4.16"
 etcetera = "0.11"
 arc-swap = "1.9"
 arrayvec = "0.7"
 
 # dev dependencies
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
 quickcheck = { version = "1", default-features = false }
+
+ignore = "0.4"
 
 [workspace.package]
 version = "25.7.1"
