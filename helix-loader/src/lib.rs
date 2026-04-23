@@ -144,6 +144,17 @@ pub fn config_file() -> PathBuf {
     CONFIG_FILE.get().map(|path| path.to_path_buf()).unwrap()
 }
 
+pub fn extra_config_files() -> Vec<PathBuf> {
+    let Ok(iter) = std::fs::read_dir(config_dir().join("conf.d")) else {
+        return vec![];
+    };
+
+    iter.filter_map(|res| res.ok())
+        .map(|entry| entry.path())
+        .filter(|entry| entry.is_file() && entry.extension().is_some_and(|ext| ext == "toml"))
+        .collect()
+}
+
 pub fn log_file() -> PathBuf {
     LOG_FILE.get().map(|path| path.to_path_buf()).unwrap()
 }
@@ -158,6 +169,17 @@ pub fn workspace_lang_config_file() -> PathBuf {
 
 pub fn lang_config_file() -> PathBuf {
     config_dir().join("languages.toml")
+}
+
+pub fn extra_lang_config_files() -> Vec<PathBuf> {
+    let Ok(iter) = std::fs::read_dir(config_dir().join("land.d")) else {
+        return vec![];
+    };
+
+    iter.filter_map(|res| res.ok())
+        .map(|entry| entry.path())
+        .filter(|entry| entry.is_file() && entry.extension().is_some_and(|ext| ext == "toml"))
+        .collect()
 }
 
 pub fn default_log_file() -> PathBuf {

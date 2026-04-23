@@ -15,13 +15,14 @@ pub fn default_lang_config() -> toml::Value {
 /// workspace is trusted for [`TrustQuery::LocalConfig`].
 pub fn user_lang_config(trust: &WorkspaceTrust) -> Result<toml::Value, toml::de::Error> {
     let global_config = crate::lang_config_file();
+    let extra_globals_configs = crate::extra_lang_config_files();
     let workspace_config = crate::workspace_lang_config_file();
 
-    let files = if trust.query_current(TrustQuery::LocalConfig).is_trusted() {
-        vec![global_config, workspace_config]
-    } else {
-        vec![global_config]
-    };
+    let mut files = vec![global_config];
+    files.extend(extra_globals_configs);
+     if trust.query_current(TrustQuery::LocalConfig).is_trusted() {
+        files.push(workspace_config);
+    }
 
     let config = files
         .iter()

@@ -120,7 +120,10 @@ FLAGS:
         Err(ConfigLoadError::Error(err)) if err.kind() == std::io::ErrorKind::NotFound => {
             Config::default()
         }
-        Err(ConfigLoadError::Error(err)) => return Err(Error::new(err)),
+        Err(ConfigLoadError::Error(err)) => {
+            let err = std::rc::Rc::into_inner(err).unwrap();
+            return Err(Error::new(err));
+        }
         Err(ConfigLoadError::BadConfig(err)) => {
             eprintln!("Bad config: {}", err);
             eprintln!("Press <ENTER> to continue with default config");
