@@ -22,20 +22,20 @@ use std::{
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct KeyTrieNode {
     /// A label for keys coming under this node, like "Goto mode"
-    #[serde(skip)]
-    name: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    pub is_sticky: Option<bool>,
     #[serde(flatten)]
     map: IndexMap<KeyEvent, KeyTrie>,
-    #[serde(skip)]
-    pub is_sticky: bool,
 }
 
 impl KeyTrieNode {
     pub fn new(name: &str, map: IndexMap<KeyEvent, KeyTrie>) -> Self {
         Self {
-            name: name.to_string(),
+            name: Some(name.to_string()),
             map,
-            is_sticky: false,
+            is_sticky: Some(false),
         }
     }
 
@@ -43,6 +43,8 @@ impl KeyTrieNode {
     /// corresponding keyevent in self, except when both other and self have
     /// subnodes for same key. In that case the merge is recursive.
     pub fn merge(&mut self, mut other: Self) {
+        self.name = self.name.clone().or(other.name);
+        self.is_sticky = self.is_sticky.or(other.is_sticky);
         for (key, trie) in std::mem::take(&mut other.map) {
             if let Some(KeyTrie::Node(node)) = self.map.get_mut(&key) {
                 if let KeyTrie::Node(other_node) = trie {
@@ -58,14 +60,14 @@ impl KeyTrieNode {
         let mut body: Vec<(BTreeSet<KeyEvent>, &str)> = Vec::with_capacity(self.len());
         for (&key, trie) in self.iter() {
             let desc = match trie {
-                KeyTrie::MappableCommand(cmd) => {
+                KeyTrie::MappableCommand { cmd, label } => {
                     if cmd.name() == "no_op" {
                         continue;
                     }
-                    cmd.doc()
+                    label.as_deref().unwrap_or(cmd.doc())
                 }
-                KeyTrie::Node(n) => &n.name,
-                KeyTrie::Sequence(_) => "[Multiple commands]",
+                KeyTrie::Node(n) => n.name.as_deref().unwrap_or_default(),
+                KeyTrie::Sequence { label, .. } => label,
             };
             match body.iter().position(|(_, d)| d == &desc) {
                 Some(pos) => {
@@ -82,7 +84,7 @@ impl KeyTrieNode {
                 (events.join(", "), desc)
             })
             .collect();
-        Info::new(self.name.clone(), &body)
+        Info::new(self.name.clone().unwrap_or_default(), &body)
     }
 }
 
@@ -108,8 +110,14 @@ impl DerefMut for KeyTrieNode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyTrie {
-    MappableCommand(MappableCommand),
-    Sequence(Vec<MappableCommand>),
+    MappableCommand {
+        label: Option<String>,
+        cmd: MappableCommand,
+    },
+    Sequence {
+        label: String,
+        commands: Vec<MappableCommand>,
+    },
     Node(KeyTrieNode),
 }
 
@@ -118,66 +126,65 @@ impl<'de> Deserialize<'de> for KeyTrie {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_any(KeyTrieVisitor)
-    }
-}
-
-struct KeyTrieVisitor;
-
-impl<'de> serde::de::Visitor<'de> for KeyTrieVisitor {
-    type Value = KeyTrie;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "a command, list of commands, or sub-keymap")
-    }
-
-    fn visit_str<E>(self, command: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        command
-            .parse::<MappableCommand>()
-            .map(KeyTrie::MappableCommand)
-            .map_err(E::custom)
-    }
-
-    fn visit_seq<S>(self, mut seq: S) -> Result<Self::Value, S::Error>
-    where
-        S: serde::de::SeqAccess<'de>,
-    {
-        let mut commands = Vec::new();
-        while let Some(command) = seq.next_element::<String>()? {
-            commands.push(
-                command
-                    .parse::<MappableCommand>()
-                    .map_err(serde::de::Error::custom)?,
-            )
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum CommandInternal {
+            MappableCommand(String),
+            CommandSequence(Vec<String>),
         }
 
-        // Prevent macro keybindings from being used in command sequences.
-        // This is meant to be a temporary restriction pending a larger
-        // refactor of how command sequences are executed.
-        if commands
-            .iter()
-            .any(|cmd| matches!(cmd, MappableCommand::Macro { .. }))
-        {
-            return Err(serde::de::Error::custom(
-                "macro keybindings may not be used in command sequences",
-            ));
+        impl CommandInternal {
+            fn into_key_trie<E: serde::de::Error>(
+                self,
+                label: Option<String>,
+            ) -> Result<KeyTrie, E> {
+                match self {
+                    Self::MappableCommand(str) => {
+                        let cmd = str.parse::<MappableCommand>().map_err(E::custom)?;
+                        Ok(KeyTrie::MappableCommand { cmd, label })
+                    }
+                    Self::CommandSequence(items) => {
+                        let commands = items
+                            .into_iter()
+                            .map(|cmd| cmd.parse::<MappableCommand>().map_err(E::custom))
+                            .collect::<Result<Vec<_>, _>>()?;
+
+                        // Prevent macro keybindings from being used in command sequences.
+                        // This is meant to be a temporary restriction pending a larger
+                        // refactor of how command sequences are executed.
+                        if commands
+                            .iter()
+                            .any(|cmd| matches!(cmd, MappableCommand::Macro { .. }))
+                        {
+                            return Err(serde::de::Error::custom(
+                                "macro keybindings may not be used in command sequences",
+                            ));
+                        }
+
+                        let label = label.unwrap_or_else(|| "[Multiple commands]".to_string());
+                        Ok(KeyTrie::Sequence { commands, label })
+                    }
+                }
+            }
         }
 
-        Ok(KeyTrie::Sequence(commands))
-    }
-
-    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-    where
-        M: serde::de::MapAccess<'de>,
-    {
-        let mut mapping = IndexMap::new();
-        while let Some((key, value)) = map.next_entry::<KeyEvent, KeyTrie>()? {
-            mapping.insert(key, value);
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum KeyTrieInternal {
+            RawCommand(CommandInternal),
+            ObjCommand {
+                label: String,
+                command: CommandInternal,
+            },
+            KeyTrieNode(KeyTrieNode),
         }
-        Ok(KeyTrie::Node(KeyTrieNode::new("", mapping)))
+
+        let internal = KeyTrieInternal::deserialize(deserializer)?;
+        match internal {
+            KeyTrieInternal::KeyTrieNode(key_trie) => Ok(KeyTrie::Node(key_trie)),
+            KeyTrieInternal::RawCommand(command) => command.into_key_trie(None),
+            KeyTrieInternal::ObjCommand { label, command } => command.into_key_trie(Some(label)),
+        }
     }
 }
 
@@ -186,8 +193,11 @@ impl KeyTrie {
         // recursively visit all nodes in keymap
         fn map_node(cmd_map: &mut ReverseKeymap, node: &KeyTrie, keys: &mut Vec<KeyEvent>) {
             match node {
-                KeyTrie::MappableCommand(MappableCommand::Macro { .. }) => {}
-                KeyTrie::MappableCommand(cmd) => {
+                KeyTrie::MappableCommand {
+                    cmd: MappableCommand::Macro { .. },
+                    ..
+                } => {}
+                KeyTrie::MappableCommand { cmd, .. } => {
                     let name = cmd.name();
                     if name != "no_op" {
                         cmd_map.entry(name.into()).or_default().push(keys.clone())
@@ -200,7 +210,7 @@ impl KeyTrie {
                         keys.pop();
                     }
                 }
-                KeyTrie::Sequence(_) => {}
+                KeyTrie::Sequence { .. } => {}
             };
         }
 
@@ -212,14 +222,14 @@ impl KeyTrie {
     pub fn node(&self) -> Option<&KeyTrieNode> {
         match *self {
             KeyTrie::Node(ref node) => Some(node),
-            KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_) => None,
+            KeyTrie::MappableCommand { .. } | KeyTrie::Sequence { .. } => None,
         }
     }
 
     pub fn node_mut(&mut self) -> Option<&mut KeyTrieNode> {
         match *self {
             KeyTrie::Node(ref mut node) => Some(node),
-            KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_) => None,
+            KeyTrie::MappableCommand { .. } | KeyTrie::Sequence { .. } => None,
         }
     }
 
@@ -237,7 +247,7 @@ impl KeyTrie {
             trie = match trie {
                 KeyTrie::Node(map) => map.get(key),
                 // leaf encountered while keys left to process
-                KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_) => None,
+                KeyTrie::MappableCommand { .. } | KeyTrie::Sequence { .. } => None,
             }?
         }
         Some(trie)
@@ -324,11 +334,11 @@ impl Keymaps {
         };
 
         let trie = match trie_node.search(&[*first]) {
-            Some(KeyTrie::MappableCommand(ref cmd)) => {
+            Some(KeyTrie::MappableCommand { ref cmd, .. }) => {
                 return KeymapResult::Matched(cmd.clone());
             }
-            Some(KeyTrie::Sequence(ref cmds)) => {
-                return KeymapResult::MatchedSequence(cmds.clone());
+            Some(KeyTrie::Sequence { ref commands, .. }) => {
+                return KeymapResult::MatchedSequence(commands.clone());
             }
             None => return KeymapResult::NotFound,
             Some(t) => t,
@@ -337,19 +347,19 @@ impl Keymaps {
         self.state.push(key);
         match trie.search(&self.state[1..]) {
             Some(KeyTrie::Node(map)) => {
-                if map.is_sticky {
+                if map.is_sticky.unwrap_or_default() {
                     self.state.clear();
                     self.sticky = Some(map.clone());
                 }
                 KeymapResult::Pending(map.clone())
             }
-            Some(KeyTrie::MappableCommand(cmd)) => {
+            Some(KeyTrie::MappableCommand { cmd, .. }) => {
                 self.state.clear();
                 KeymapResult::Matched(cmd.clone())
             }
-            Some(KeyTrie::Sequence(cmds)) => {
+            Some(KeyTrie::Sequence { commands, .. }) => {
                 self.state.clear();
-                KeymapResult::MatchedSequence(cmds.clone())
+                KeymapResult::MatchedSequence(commands.clone())
             }
             None => KeymapResult::Cancelled(self.state.drain(..).collect()),
         }
@@ -437,19 +447,19 @@ mod tests {
         // Assumes that `g` is a node in default keymap
         assert_eq!(
             keymap.search(&[key!('g'), key!('$')]).unwrap(),
-            &KeyTrie::MappableCommand(MappableCommand::goto_line_end),
+            &keymap!(@trie goto_line_end),
             "Leaf should be present in merged subnode"
         );
         // Assumes that `gg` is in default keymap
         assert_eq!(
             keymap.search(&[key!('g'), key!('g')]).unwrap(),
-            &KeyTrie::MappableCommand(MappableCommand::delete_char_forward),
+            &keymap!(@trie delete_char_forward),
             "Leaf should replace old leaf in merged subnode"
         );
         // Assumes that `ge` is in default keymap
         assert_eq!(
             keymap.search(&[key!('g'), key!('e')]).unwrap(),
-            &KeyTrie::MappableCommand(MappableCommand::goto_last_line),
+            &keymap!(@trie goto_last_line),
             "Old leaves in subnode should be present in merged node"
         );
 
@@ -487,7 +497,7 @@ mod tests {
         // Make sure mapping works
         assert_eq!(
             keymap.search(&[key!(' '), key!('s'), key!('v')]).unwrap(),
-            &KeyTrie::MappableCommand(MappableCommand::vsplit),
+            &keymap!(@trie vsplit),
             "Leaf should be present in merged subnode"
         );
         // Merged nodes were ordered at the end
@@ -565,12 +575,8 @@ a = "append_mode"
         let expectation = KeyTrie::Node(KeyTrieNode::new(
             "",
             indexmap! {
-                key!('+') => KeyTrie::MappableCommand(
-                    MappableCommand::select_all
-                ),
-                key!('a') => KeyTrie::MappableCommand(
-                    MappableCommand::append_mode
-                ),
+                key!('+') => keymap!(@trie select_all),
+                key!('a') => keymap!(@trie select_all),
             },
         ));
 
@@ -602,14 +608,16 @@ is_sticky = false
         let expectation = KeyTrie::Node(KeyTrieNode::new(
             "",
             indexmap! {
-                key => KeyTrie::Sequence(vec!{
+                key => KeyTrie::Sequence{
+                    label: "[Multiple commands]".into(),
+                    commands: vec!{
                     MappableCommand::select_all,
                     MappableCommand::Typable {
                         name: "pipe".to_string(),
                         args: "sed -E 's/\\s+$//g'".to_string(),
                         doc: "".to_string(),
                     },
-                })
+                }}
             },
         ));
 
