@@ -80,7 +80,10 @@ macro_rules! alt {
 #[macro_export]
 macro_rules! keymap {
     (@trie $cmd:ident) => {
-        $crate::keymap::KeyTrie::MappableCommand($crate::commands::MappableCommand::$cmd)
+        $crate::keymap::KeyTrie::MappableCommand{
+            label: None,
+            cmd: $crate::commands::MappableCommand::$cmd,
+        }
     };
 
     (@trie
@@ -111,7 +114,7 @@ macro_rules! keymap {
                 )+
             )*
             let mut _node = $crate::keymap::KeyTrieNode::new($label, _map);
-            $( _node.is_sticky = $sticky; )?
+            $( _node.is_sticky = Some($sticky); )?
             $crate::keymap::KeyTrie::Node(_node)
         }
     };
