@@ -234,7 +234,7 @@ Change the `format` string to customize the blame message displayed. Variables a
 ### `[editor.cursor-shape]` Section
 
 Defines the shape of cursor in each mode.
-Valid values for these options are `block`, `bar`, `underline`, or `hidden`.
+Valid values for these options are `block`, `terminal-block`, `bar`, `underline`, or `hidden`.
 
 > 💡 Due to limitations of the terminal environment, only the primary cursor can
 > change shape.

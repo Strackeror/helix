@@ -12,7 +12,7 @@ use helix_view::{
     document::{DocumentOpenError, DocumentSavedEventResult},
     editor::{ConfigEvent, EditorEvent},
     events::EditorConfigDidChange,
-    graphics::Rect,
+    graphics::{CursorKind, Modifier, Rect},
     theme,
     tree::Layout,
     Align, Editor,
@@ -289,6 +289,22 @@ impl Application {
         self.editor.cursor_cache.reset();
 
         let pos = pos.map(|pos| (pos.col as u16, pos.row as u16));
+
+        // Hide the manually drawn cursor under the terminal block cursor
+        if kind == CursorKind::TerminalBlock {
+            if let Some((x, y)) = pos {
+                if let Some(cell) = surface.get_mut(x, y) {
+                    if cell.modifier.contains(Modifier::REVERSED) {
+                        // Themes with reversed cursor colors: remove the reverse modifier
+                        cell.modifier.remove(Modifier::REVERSED);
+                    } else {
+                        // Themes with static cursor colors: swap foreground and background
+                        std::mem::swap(&mut cell.fg, &mut cell.bg);
+                    }
+                }
+            }
+        }
+
         self.terminal.draw(pos, kind).unwrap();
     }
 
@@ -1289,11 +1305,6 @@ impl Application {
     }
 
     fn restore_term(&mut self) -> std::io::Result<()> {
-        use helix_view::graphics::CursorKind;
-        self.terminal
-            .backend_mut()
-            .show_cursor(CursorKind::Block)
-            .ok();
         self.terminal.restore()
     }
 
